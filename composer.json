@@ -1,0 +1,9 @@
+{
+    "require": {
+        "dompdf/dompdf": "^2.0",
+        "twbs/bootstrap": "5.2.2",
+        "components/jquery": "^3.6",
+        "components/font-awesome": "^6.2.0",
+      "ext-mysqli": "*"
+    }
+}
