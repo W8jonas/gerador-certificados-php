@@ -1,93 +1,115 @@
 <?php
-isset($_GET['email']) ? $email = $_GET['email'] : header('Location: /certificados');
-if ($_GET['email'] == "") { header('Location: /certificados'); }
-$data = array_map('str_getcsv', file('../participantes.csv'));
-if (!array_search($email, array_column($data, 1))) {
-    header('Location: ' . $_SERVER['HTTP_REFERER'] . '?msg=error');
-}
-$participantId = array_search($email, array_column($data, 1));
+require_once __DIR__ . '/../vendor/autoload.php';
 
-require '../vendor/autoload.php';
-
-// reference the Dompdf namespace
 use Dompdf\Dompdf;
 use Dompdf\Options;
 
-// Set Dompdf Options
-$options = new Options();
-$options->set('defaultPaperSize', 'a4');
-$options->set('defaultPaperOrientation', 'landscape');
-$options->set('isRemoteEnabled', 'true');
-//$options->set('defaultFont', 'Montserrat');
-$options->set('dpi', 300);
+/** -----------------------------------------------------------------
+ *  1) Valida e sanitiza a entrada
+ * -----------------------------------------------------------------*/
+if (empty($_POST['email'])) {
+    header('Location: ../index.php?msg=invalid');
+    exit;
+}
 
-$html = '
+$email = strtolower(trim($_POST['email']));
 
-<style>
-    * {
-        font-family: "Segoe UI",serif;
-    }
+if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+    header('Location: ../index.php?msg=invalid');
+    exit;
+}
 
-    @page {
-        margin: 0;
-    }
+/** -----------------------------------------------------------------
+ *  2) Procura o e-mail no CSV
+ * -----------------------------------------------------------------*/
+$csvPath = __DIR__ . '/../participantes.csv';
+if (!file_exists($csvPath)) {
+    http_response_code(500);
+    exit('Arquivo de participantes não encontrado.');
+}
 
-    @font-face {
-        font-family: "Segoe UI";
-        font-style: normal;
-        font-weight: 400;
-        src: url("https://simposiojbrugada.com.br/certificados/inc/fonts/segoeui.ttf") format("truetype");
-    }
-    
-        @font-face {
-        font-family: "Segoe UI";
-        font-style: normal;
-        font-weight: bold;
-        src: url("https://simposiojbrugada.com.br/certificados/inc/fonts/segoeuib.ttf") format("truetype");
-    }
-    
-    img {
-        width: 100%;
-    }
+$handle = fopen($csvPath, 'r');
+if (!$handle) {
+    http_response_code(500);
+    exit('Não foi possível abrir a lista de participantes.');
+}
 
-    .cert {
-        background-image: url("https://simposiojbrugada.com.br/certificados/inc/images/background.png");
-        background-size: contain;
-        width: 100%;
-        height: 100%;
-        background-repeat: no-repeat;
-    }
-    
-    .text {
-        position:absolute;
-        top: 40.5%;
-        left: 0;
-        right: 0;
-        margin: auto;
-        text-align: center;
-        font-weight: bold;
-        text-transform: uppercase;
-        font-size: 90px;
-        color: #000;
-    }
-</style>
-<div class="cert">
-    <p class="text">'. $data[$participantId][0] .'</p>
-</div>';
+$header = fgetcsv($handle); 
+$nome = null;
+while (($row = fgetcsv($handle)) !== false) {
+    // Protege de cabeçalhos: pula linhas sem 2 colunas
+    if (count($row) < 2) continue;
 
-// instantiate and use the dompdf class
+    // força UTF-8 caso o CSV esteja em ISO-8859-1
+    $rowEmail = strtolower(trim($row[1]));  // coluna 1 = e-mail
+    if ($rowEmail === $email) {
+        $nome = trim($row[0]);              // coluna 0 = nome
+        break;
+    }
+}
+fclose($handle);
+
+if (!$nome) {
+    header('Location: ../index.php?msg=notfound' . '&email=' . urlencode($email) . '&nome=' . urlencode($nome));
+    exit;
+}
+
+/** -----------------------------------------------------------------
+ *  3) Gera o PDF com Dompdf
+ * -----------------------------------------------------------------*/
+$options = new Options([
+    'defaultPaperSize'       => 'a4',
+    'defaultPaperOrientation'=> 'landscape',
+    'dpi'                    => 300,
+    'isRemoteEnabled'        => true
+]);
 $dompdf = new Dompdf($options);
 
-// Load the default html file
-$dompdf->loadHtml($html);
+// usa caminho absoluto local para fontes (mais rápido e confiável)
+$fontPath = __DIR__.'/fonts/';   // copie os .ttf para essa pasta
 
-// Render the HTML as PDF
+$html = <<<HTML
+<style>
+@page { margin:0; }
+
+@font-face {
+    font-family:"Segoe UI";
+    src:url("{$fontPath}segoeui.ttf") format("truetype");
+}
+@font-face {
+    font-family:"Segoe UI";
+    font-weight:bold;
+    src:url("{$fontPath}segoeuib.ttf") format("truetype");
+}
+
+body,html{margin:0;padding:0;font-family:"Segoe UI",sans-serif;}
+.cert{
+    background:url("https://simposiojbrugada.com.br/certificados/inc/images/background.png") no-repeat center/contain;
+    width:100%;height:100%;
+    position:relative;
+}
+.text{
+    position:absolute;
+    top:40.5%;
+    left:0;right:0;
+    text-align:center;
+    font-size:90px;
+    font-weight:bold;
+    text-transform:uppercase;
+}
+</style>
+<div class="cert">
+    <div class="text">{$nome}</div>
+</div>
+HTML;
+
+$dompdf->loadHtml($html);
 $dompdf->render();
 
-// Save the file in server
-$file = $dompdf->output();
-//file_put_contents('docs/' . slugify($data[0]) . '.pdf', $file);
-
-// Output the generated PDF to Browser
-$options = ['compress' => '1', 'Attachment' => '0'];
-$dompdf->stream('certificado.pdf', $options);
+/** -----------------------------------------------------------------
+ *  4) Entrega o PDF ao navegador
+ * -----------------------------------------------------------------*/
+$dompdf->stream(
+    'certificado.pdf',
+    ['Attachment' => false]  // abre no navegador
+);
